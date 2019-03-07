@@ -18,10 +18,11 @@ parser.add_argument('--output_dir', default='./output', type=str,
                     help='Where to write output.')
 parser.add_argument('--checkpoint_dir', default='', type=str,
                     help='The directory of tensorflow checkpoint.')
-
+parser.add_argument('--demo', default=False, type=bool,
+                    help='demo for comparison')
 
 if __name__ == "__main__":
-    ng.get_gpus(1)
+    ng.get_gpus(1, dedicated=False)
     args = parser.parse_args()
 
     image_list = np.genfromtxt(args.image_list, dtype=np.str, encoding='utf-8')
@@ -98,11 +99,13 @@ if __name__ == "__main__":
             # print(image.shape, mask.shape, result[0][:, :, ::-1].shape)
             # pdb.set_trace()
             mask_mult = (255-mask[0])/255
-            # choose concat dimension
-            if image.shape[1] < image.shape[2]:
-                final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=0)
+            if args.demo:
+                # choose concat dimension
+                if image.shape[1] < image.shape[2]:
+                    final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=0)
+                else:
+                    final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=1)
             else:
-                final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=1)
-
+                final = result[0][:, :, ::-1]
             cv2.imwrite(save_path, final)
             print("tested: {}".format(save_path))
