@@ -98,13 +98,15 @@ if __name__ == "__main__":
 
             # print(image.shape, mask.shape, result[0][:, :, ::-1].shape)
             # pdb.set_trace()
-            mask_mult = (255-mask[0])/255
             if args.demo:
+                mask_mult = (255-mask[0])
+                ori_image = image.copy()
+                image[0][mask_mult==0] = 255
                 # choose concat dimension
                 if image.shape[1] < image.shape[2]:
-                    final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=0)
+                    final = np.concatenate([image[0], result[0][:, :, ::-1], ori_image[0]], axis=0)
                 else:
-                    final = np.concatenate([image[0]*mask_mult, result[0][:, :, ::-1], image[0]], axis=1)
+                    final = np.concatenate([image[0], result[0][:, :, ::-1], ori_image[0]], axis=1)
             else:
                 final = result[0][:, :, ::-1]
             cv2.imwrite(save_path, final)
