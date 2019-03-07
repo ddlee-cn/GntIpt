@@ -1,0 +1,16 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+verify_ssl = true
+
+[dev-packages]
+pylint = "*"
+
+[packages]
+neuralgym = {git = "https://github.com/JiahuiYu/neuralgym"}
+opencv-python = "*"
+pyyaml = "*"
+tensorflow-gpu = "~=1.7.0"
+
+[requires]
+python_version = "3.6"

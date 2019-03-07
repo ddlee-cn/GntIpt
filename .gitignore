@@ -1,3 +1,8 @@
+.idea
+model_logs
+.vscode
+*.swp
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
