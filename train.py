@@ -2,15 +2,23 @@ import os
 import glob
 import socket
 import logging
-
+import argparse
+import pdb
 import tensorflow as tf
 import neuralgym as ng
 
+from pathlib import Path
+from shutil import copyfile
 from inpaint_model import InpaintCAModel
 
 
 logger = logging.getLogger()
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--checkpoint_dir', default='/userhome/checkpoints/GntIpt', type=str,
+                    help='The directory of tensorflow checkpoint.')
+parser.add_argument('--config', default="configs/re_inpaint.yml", type=str,
+                    help='config YAML file')
 
 def multigpu_graph_def(model, data, config, gpu_id=0, loss_type='g'):
     with tf.device('/cpu:0'):
@@ -30,7 +38,9 @@ def multigpu_graph_def(model, data, config, gpu_id=0, loss_type='g'):
 
 
 if __name__ == "__main__":
-    config = ng.Config('re_inpaint.yml')
+    args = parser.parse_args()
+    checkpoint_dir = Path(args.checkpoint_dir)
+    config = ng.Config(args.config)
     if config.GPU_ID != -1:
         ng.set_gpus(config.GPU_ID)
     else:
@@ -71,10 +81,19 @@ if __name__ == "__main__":
     else:
         gradient_processor = None
     # log dir
-    log_prefix = 'model_logs/' + '_'.join([
-        ng.date_uid(), socket.gethostname(), config.DATASET,
-        'MASKED' if config.GAN_WITH_MASK else 'NORMAL',
-        config.GAN,config.LOG_DIR])
+    # log_prefix = 'model_logs/' + '_'.join([
+    #     ng.date_uid(), socket.gethostname(), config.DATASET,
+    #     'MASKED' if config.GAN_WITH_MASK else 'NORMAL',
+    #     config.GAN,config.LOG_DIR])
+    log_prefix = checkpoint_dir.joinpath(config.DATASET).joinpath(ng.date_uid())
+    if not log_prefix.parent.exists():
+        log_prefix.parent.mkdir()
+    log_prefix.mkdir()
+
+    # copy config file to log folder
+    copyfile(args.config, log_prefix.joinpath(Path(args.config).name))
+    log_prefix = str(log_prefix)
+
     # train discriminator with secondary trainer, should initialize before
     # primary trainer.
     discriminator_training_callback = ng.callbacks.SecondaryTrainer(
