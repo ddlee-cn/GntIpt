@@ -45,16 +45,32 @@ if __name__ == "__main__":
         ng.set_gpus(config.GPU_ID)
     else:
         ng.get_gpus(config.NUM_GPUS)
+    mask = None
+    if config.External_mask:
+        batch_size = config.BATCH_SIZE
+        # load irregualr mask dataset
+        with open(config.External_mask) as f:
+            fnames = f.read().splitlines()
+        filename_dataset = tf.data.Dataset.list_files(fnames)
+        img_dataset = filename_dataset.map(lambda x: tf.image.decode_png(tf.read_file(x)))
+        img_dataset = img_dataset.map(lambda x: tf.image.resize_images(x, config.IMG_SHAPES[0:2]))
+        img_dataset = img_dataset.repeat()
+        img_dataset = img_dataset.batch(batch_size)
+        img_dataset = img_dataset.prefetch(buffer_size=batch_size*2)
+        iter = img_dataset.make_one_shot_iterator()
+        mask = iter.get_next()
+
     # training data
     with open(config.DATA_FLIST[config.DATASET][0]) as f:
         fnames = f.read().splitlines()
     data = ng.data.DataFromFNames(
         fnames, config.IMG_SHAPES, random_crop=config.RANDOM_CROP)
     images = data.data_pipeline(config.BATCH_SIZE)
+    # pdb.set_trace()
     # main model
     model = InpaintCAModel()
     g_vars, d_vars, losses = model.build_graph_with_losses(
-        images, config=config)
+        images, mask, config=config)
     # validation images
     if config.VAL:
         with open(config.DATA_FLIST[config.DATASET][1]) as f:
@@ -106,7 +122,10 @@ if __name__ == "__main__":
             'model': model, 'data': data, 'config': config, 'loss_type': 'd'},
     )
     # train generator with primary trainer
+    # use multi gpu
+    # trainer = ng.train.MultiGPUTrainer(
     trainer = ng.train.Trainer(
+        num_gpus = config.NUM_GPUS,
         optimizer=g_optimizer,
         var_list=g_vars,
         max_iters=config.MAX_ITERS,

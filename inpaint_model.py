@@ -1,6 +1,7 @@
 """ common model for DCGAN """
 import logging
 
+import pdb
 import cv2
 import neuralgym as ng
 import tensorflow as tf
