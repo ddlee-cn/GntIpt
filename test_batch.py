@@ -18,7 +18,7 @@ parser.add_argument('--output_dir', default='./output', type=str,
                     help='Where to write output.')
 parser.add_argument('--checkpoint_dir', default='', type=str,
                     help='The directory of tensorflow checkpoint.')
-parser.add_argument('--demo', default=False, type=bool,
+parser.add_argument('--demo', default=False, action='store_true',
                     help='demo for comparison')
 
 if __name__ == "__main__":
@@ -45,7 +45,10 @@ if __name__ == "__main__":
     # read the first image to init graph shape
     image = cv2.imread(image_list[-2])
     mask = cv2.imread(mask_list[-2])
+
+    # resize mask
     h_old, w_old, _ = image.shape
+    mask = cv2.resize(mask, (h_old, w_old))
     grid = 8
     image = image[:h_old//grid*grid, :w_old//grid*grid, :]
     mask = mask[:h_old//grid*grid, :w_old//grid*grid, :]
@@ -68,11 +71,13 @@ if __name__ == "__main__":
         for image_file, mask_file in zip(image_list, mask_list):
             image = cv2.imread(image_file)
             mask = cv2.imread(mask_file)
-            mask = 255-mask
-
-            assert image.shape == mask.shape
+            # use mask = 255-mask for ICME Testing
+            # use mask for pconv_irregular_mask
 
             h, w, _ = image.shape
+            if not image.shape == mask.shape:
+                mask = cv2.resize(mask, (h, w))
+
             grid = 8
             image = image[:h//grid*grid, :w//grid*grid, :]
             mask = mask[:h//grid*grid, :w//grid*grid, :]
