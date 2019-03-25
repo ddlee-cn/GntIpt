@@ -17,8 +17,9 @@ logger = logging.getLogger()
 parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint_dir', default='/userhome/checkpoints/GntIpt', type=str,
                     help='The directory of tensorflow checkpoint.')
-parser.add_argument('--config', default="configs/re_inpaint.yml", type=str,
+parser.add_argument('--config', default="configs/finetune.yml", type=str,
                     help='config YAML file')
+parser.add_argument('--option', default="finetune", type=str, help="training option: scratch, finetune, resume")
 
 def multigpu_graph_def(model, data, config, gpu_id=0, loss_type='g'):
     with tf.device('/cpu:0'):
@@ -54,6 +55,8 @@ if __name__ == "__main__":
         filename_dataset = tf.data.Dataset.list_files(fnames)
         img_dataset = filename_dataset.map(lambda x: tf.image.decode_png(tf.read_file(x)))
         img_dataset = img_dataset.map(lambda x: tf.image.resize_images(x, config.IMG_SHAPES[0:2]))
+        # convert to binary
+        img_dataset = img_dataset.map(lambda x: x/255)
         img_dataset = img_dataset.repeat()
         img_dataset = img_dataset.batch(batch_size)
         img_dataset = img_dataset.prefetch(buffer_size=batch_size*2)
@@ -101,7 +104,8 @@ if __name__ == "__main__":
     #     ng.date_uid(), socket.gethostname(), config.DATASET,
     #     'MASKED' if config.GAN_WITH_MASK else 'NORMAL',
     #     config.GAN,config.LOG_DIR])
-    log_prefix = checkpoint_dir.joinpath(config.DATASET).joinpath(ng.date_uid())
+    pretrained_prefix = str(checkpoint_dir.joinpath(config.LOD_DIR).joinpath("pretrained"))
+    log_prefix = checkpoint_dir.joinpath(config.LOG_DIR).joinpath(ng.date_uid())
     if not log_prefix.parent.exists():
         log_prefix.parent.mkdir()
     log_prefix.mkdir()
@@ -110,6 +114,14 @@ if __name__ == "__main__":
     copyfile(args.config, log_prefix.joinpath(Path(args.config).name))
     log_prefix = str(log_prefix)
 
+    # determine training option: scratch, finetune(load model from pretrained), resume(load model from log_dir)
+    if args.option is "scratch":
+        restore_prefix = ""
+    elif args.option is "resume":
+        restore_prefix = log_prefix
+    elif args.option is "finetune":
+        restore_prefix = pretrained_prefix
+    
     # train discriminator with secondary trainer, should initialize before
     # primary trainer.
     discriminator_training_callback = ng.callbacks.SecondaryTrainer(
@@ -142,7 +154,7 @@ if __name__ == "__main__":
         trainer.add_callbacks(discriminator_training_callback)
     trainer.add_callbacks([
         ng.callbacks.WeightsViewer(),
-        ng.callbacks.ModelRestorer(trainer.context['saver'], dump_prefix='model_logs/'+config.MODEL_RESTORE+'/snap', optimistic=True),
+        ng.callbacks.ModelRestorer(trainer.context['saver'], dump_prefix=restore_prefix+'/snap', optimistic=True),
         ng.callbacks.ModelSaver(config.TRAIN_SPE, trainer.context['saver'], log_prefix+'/snap'),
         ng.callbacks.SummaryWriter((config.VAL_PSTEPS//1), trainer.context['summary_writer'], tf.summary.merge_all()),
     ])
