@@ -1,4 +1,59 @@
-""" common model for DCGAN """
+""" common model for DCGAN
+
+PatchGAN(pix2pix)
+ref: https://github.com/affinelayer/pix2pix-tensorflow/blob/master/pix2pix.py
+
+def create_discriminator(discrim_inputs, discrim_targets):
+    n_layers = 3
+    layers = []
+
+    # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
+    input = tf.concat([discrim_inputs, discrim_targets], axis=3)
+
+    # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
+    with tf.variable_scope("layer_1"):
+        convolved = discrim_conv(input, a.ndf, stride=2)
+        rectified = lrelu(convolved, 0.2)
+        layers.append(rectified)
+
+    # layer_2: [batch, 128, 128, ndf] => [batch, 64, 64, ndf * 2]
+    # layer_3: [batch, 64, 64, ndf * 2] => [batch, 32, 32, ndf * 4]
+    # layer_4: [batch, 32, 32, ndf * 4] => [batch, 31, 31, ndf * 8]
+    for i in range(n_layers):
+        with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+            out_channels = a.ndf * min(2**(i+1), 8)
+            stride = 1 if i == n_layers - 1 else 2  # last layer here has stride 1
+            convolved = discrim_conv(layers[-1], out_channels, stride=stride)
+            normalized = batchnorm(convolved)
+            rectified = lrelu(normalized, 0.2)
+            layers.append(rectified)
+
+    # layer_5: [batch, 31, 31, ndf * 8] => [batch, 30, 30, 1]
+    with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+        convolved = discrim_conv(rectified, out_channels=1, stride=1)
+        output = tf.sigmoid(convolved)
+        layers.append(output)
+
+        return layers[-1]
+
+# create two copies of discriminator, one for real pairs and one for fake pairs
+# they share the same underlying variables
+with tf.name_scope("real_discriminator"):
+    with tf.variable_scope("discriminator"):
+        # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+        predict_real = create_discriminator(inputs, targets)
+
+with tf.name_scope("fake_discriminator"):
+    with tf.variable_scope("discriminator", reuse=True):
+        # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+        predict_fake = create_discriminator(inputs, outputs)
+
+with tf.name_scope("discriminator_loss"):
+    # minimizing -tf.log will try to get inputs to 1
+    # predict_real => 1
+    # predict_fake => 0
+    discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+"""
 import logging
 
 import pdb
@@ -48,6 +103,7 @@ class InpaintCAModel(Model):
                 arg_scope([gen_conv, gen_deconv],
                           training=training, padding=padding):
             # stage1
+            pdb.set_trace()
             x = gen_conv(x, cnum, 5, 1, name='conv1')
             x = gen_conv(x, 2*cnum, 3, 2, name='conv2_downsample')
             x = gen_conv(x, 2*cnum, 3, 1, name='conv3')
@@ -117,8 +173,7 @@ class InpaintCAModel(Model):
             x = dis_conv(x, cnum, name='conv1', training=training)
             x = dis_conv(x, cnum*2, name='conv2', training=training)
             x = dis_conv(x, cnum*4, name='conv3', training=training)
-            x = dis_conv(x, cnum*8, name='conv4', training=training)
-            x = flatten(x, name='flatten')
+            x = dis_conv(x, cnum*8, name='conv4', training=training) # 32x16x16x512
             return x
 
     def build_wgan_global_discriminator(self, x, reuse=False, training=True):
@@ -127,8 +182,10 @@ class InpaintCAModel(Model):
             x = dis_conv(x, cnum, name='conv1', training=training)
             x = dis_conv(x, cnum*2, name='conv2', training=training)
             x = dis_conv(x, cnum*4, name='conv3', training=training)
-            x = dis_conv(x, cnum*4, name='conv4', training=training)
-            x = flatten(x, name='flatten')
+            x = dis_conv(x, cnum*4, name='conv4', training=training) # 32x16x16x256
+            # remove flatten layer to make it like PatchGAN
+            # x = flatten(x, name='flatten')
+            x = dis_conv(x, 1, name='conv5', training=training)
             return x
 
     def build_wgan_discriminator(self, batch_local, batch_global,
@@ -142,12 +199,24 @@ class InpaintCAModel(Model):
             dout_global = tf.layers.dense(dglobal, 1, name='dout_global_fc')
             return dout_local, dout_global
 
-    def build_graph_with_losses(self, batch_data, config, training=True,
+    def build_wgan_discriminator_global(self, batch_global,
+                                 reuse=False, training=True):
+        with tf.variable_scope('discriminator', reuse=reuse):
+            dglobal = self.build_wgan_global_discriminator(
+                batch_global, reuse=reuse, training=training)
+            # add new layer for global patch
+            dout_global = tf.reduce_mean(dglobal, name='dout_global_patch')
+            return dout_global
+
+
+    def build_graph_with_losses(self, batch_data, mask, config, training=True,
                                 summary=False, reuse=False):
         batch_pos = batch_data / 127.5 - 1.
         # generate mask, 1 represents masked point
-        bbox = random_bbox(config)
-        mask = bbox2mask(bbox, config, name='mask_c')
+        # if mask is None:
+        #     bbox = random_bbox(config)
+        #     mask = bbox2mask(bbox, config, name='mask_c')
+
         batch_incomplete = batch_pos*(1.-mask)
         x1, x2, offset_flow = self.build_inpaint_net(
             batch_incomplete, mask, config, reuse=reuse, training=training,
@@ -161,23 +230,24 @@ class InpaintCAModel(Model):
         losses = {}
         # apply mask and complete image
         batch_complete = batch_predicted*mask + batch_incomplete*(1.-mask)
-        # local patches
-        local_patch_batch_pos = local_patch(batch_pos, bbox)
-        local_patch_batch_predicted = local_patch(batch_predicted, bbox)
-        local_patch_x1 = local_patch(x1, bbox)
-        local_patch_x2 = local_patch(x2, bbox)
-        local_patch_batch_complete = local_patch(batch_complete, bbox)
-        local_patch_mask = local_patch(mask, bbox)
-        l1_alpha = config.COARSE_L1_ALPHA
-        losses['l1_loss'] = l1_alpha * tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x1)*spatial_discounting_mask(config))
-        if not config.PRETRAIN_COARSE_NETWORK:
-            losses['l1_loss'] += tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x2)*spatial_discounting_mask(config))
+        # remove local patch and spatial_discounting for irregular mask
+        # # local patches
+        # local_patch_batch_pos = local_patch(batch_pos, bbox)
+        # local_patch_batch_predicted = local_patch(batch_predicted, bbox)
+        # local_patch_x1 = local_patch(x1, bbox)
+        # local_patch_x2 = local_patch(x2, bbox)
+        # local_patch_batch_complete = local_patch(batch_complete, bbox)
+        # local_patch_mask = local_patch(mask, bbox)
+        # l1_alpha = config.COARSE_L1_ALPHA
+        # losses['l1_loss'] = l1_alpha * tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x1)*spatial_discounting_mask(config))
+        # if not config.PRETRAIN_COARSE_NETWORK:
+        #     losses['l1_loss'] += tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x2)*spatial_discounting_mask(config))        
         losses['ae_loss'] = l1_alpha * tf.reduce_mean(tf.abs(batch_pos - x1) * (1.-mask))
         if not config.PRETRAIN_COARSE_NETWORK:
             losses['ae_loss'] += tf.reduce_mean(tf.abs(batch_pos - x2) * (1.-mask))
         losses['ae_loss'] /= tf.reduce_mean(1.-mask)
         if summary:
-            scalar_summary('losses/l1_loss', losses['l1_loss'])
+            # scalar_summary('losses/l1_loss', losses['l1_loss'])
             scalar_summary('losses/ae_loss', losses['ae_loss'])
             viz_img = [batch_pos, batch_incomplete, batch_complete]
             if offset_flow is not None:
@@ -191,38 +261,42 @@ class InpaintCAModel(Model):
         # gan
         batch_pos_neg = tf.concat([batch_pos, batch_complete], axis=0)
         # local deterministic patch
-        local_patch_batch_pos_neg = tf.concat([local_patch_batch_pos, local_patch_batch_complete], 0)
+        # local_patch_batch_pos_neg = tf.concat([local_patch_batch_pos, local_patch_batch_complete], 0)
         if config.GAN_WITH_MASK:
             batch_pos_neg = tf.concat([batch_pos_neg, tf.tile(mask, [config.BATCH_SIZE*2, 1, 1, 1])], axis=3)
         # wgan with gradient penalty
         if config.GAN == 'wgan_gp':
             # seperate gan
-            pos_neg_local, pos_neg_global = self.build_wgan_discriminator(local_patch_batch_pos_neg, batch_pos_neg, training=training, reuse=reuse)
-            pos_local, neg_local = tf.split(pos_neg_local, 2)
+            # pos_neg_local, pos_neg_global = self.build_wgan_discriminator(local_patch_batch_pos_neg, batch_pos_neg, training=training, reuse=reuse)
+            # pos_local, neg_local = tf.split(pos_neg_local, 2)
+            pos_neg_global = self.build_wgan_discriminator_global(batch_pos_neg, training=training, resue=reuse)
             pos_global, neg_global = tf.split(pos_neg_global, 2)
             # wgan loss
-            g_loss_local, d_loss_local = gan_wgan_loss(pos_local, neg_local, name='gan/local_gan')
+            # g_loss_local, d_loss_local = gan_wgan_loss(pos_local, neg_local, name='gan/local_gan')
             g_loss_global, d_loss_global = gan_wgan_loss(pos_global, neg_global, name='gan/global_gan')
-            losses['g_loss'] = config.GLOBAL_WGAN_LOSS_ALPHA * g_loss_global + g_loss_local
-            losses['d_loss'] = d_loss_global + d_loss_local
+            # losses['g_loss'] = config.GLOBAL_WGAN_LOSS_ALPHA * g_loss_global + g_loss_local
+            # losses['d_loss'] = d_loss_global + d_loss_local
+            losses['d_loss'] = d_loss_global
             # gp
-            interpolates_local = random_interpolates(local_patch_batch_pos, local_patch_batch_complete)
+            # interpolates_local = random_interpolates(local_patch_batch_pos, local_patch_batch_complete)
             interpolates_global = random_interpolates(batch_pos, batch_complete)
-            dout_local, dout_global = self.build_wgan_discriminator(
-                interpolates_local, interpolates_global, reuse=True)
+            # dout_local, dout_global = self.build_wgan_discriminator(
+            #     interpolates_local, interpolates_global, reuse=True)
+            dout_global = self.build_wgan_discriminator_global(interpolates_global, reuse=True)
             # apply penalty
-            penalty_local = gradients_penalty(interpolates_local, dout_local, mask=local_patch_mask)
+            # penalty_local = gradients_penalty(interpolates_local, dout_local, mask=local_patch_mask)
             penalty_global = gradients_penalty(interpolates_global, dout_global, mask=mask)
-            losses['gp_loss'] = config.WGAN_GP_LAMBDA * (penalty_local + penalty_global)
+            # losses['gp_loss'] = config.WGAN_GP_LAMBDA * (penalty_local + penalty_global)
+            losses['gp_loss'] = config.WGAN_GP_LAMBDA * penalty_global
             losses['d_loss'] = losses['d_loss'] + losses['gp_loss']
             if summary and not config.PRETRAIN_COARSE_NETWORK:
-                gradients_summary(g_loss_local, batch_predicted, name='g_loss_local')
+                # gradients_summary(g_loss_local, batch_predicted, name='g_loss_local')
                 gradients_summary(g_loss_global, batch_predicted, name='g_loss_global')
                 scalar_summary('convergence/d_loss', losses['d_loss'])
-                scalar_summary('convergence/local_d_loss', d_loss_local)
+                # scalar_summary('convergence/local_d_loss', d_loss_local)
                 scalar_summary('convergence/global_d_loss', d_loss_global)
                 scalar_summary('gan_wgan_loss/gp_loss', losses['gp_loss'])
-                scalar_summary('gan_wgan_loss/gp_penalty_local', penalty_local)
+                # scalar_summary('gan_wgan_loss/gp_penalty_local', penalty_local)
                 scalar_summary('gan_wgan_loss/gp_penalty_global', penalty_global)
 
         if summary and not config.PRETRAIN_COARSE_NETWORK:
@@ -230,16 +304,17 @@ class InpaintCAModel(Model):
             gradients_summary(losses['g_loss'], batch_predicted, name='g_loss')
             gradients_summary(losses['g_loss'], x1, name='g_loss_to_x1')
             gradients_summary(losses['g_loss'], x2, name='g_loss_to_x2')
-            gradients_summary(losses['l1_loss'], x1, name='l1_loss_to_x1')
-            gradients_summary(losses['l1_loss'], x2, name='l1_loss_to_x2')
+            # gradients_summary(losses['l1_loss'], x1, name='l1_loss_to_x1')
+            # gradients_summary(losses['l1_loss'], x2, name='l1_loss_to_x2')
             gradients_summary(losses['ae_loss'], x1, name='ae_loss_to_x1')
             gradients_summary(losses['ae_loss'], x2, name='ae_loss_to_x2')
         if config.PRETRAIN_COARSE_NETWORK:
             losses['g_loss'] = 0
         else:
             losses['g_loss'] = config.GAN_LOSS_ALPHA * losses['g_loss']
-        losses['g_loss'] += config.L1_LOSS_ALPHA * losses['l1_loss']
-        logger.info('Set L1_LOSS_ALPHA to %f' % config.L1_LOSS_ALPHA)
+        # TODO: modify GAN_LOSS_ALPHA, AE_LOSS_ALPHA
+        # losses['g_loss'] += config.L1_LOSS_ALPHA * losses['l1_loss']
+        # logger.info('Set L1_LOSS_ALPHA to %f' % config.L1_LOSS_ALPHA)
         logger.info('Set GAN_LOSS_ALPHA to %f' % config.GAN_LOSS_ALPHA)
         if config.AE_LOSS:
             losses['g_loss'] += config.AE_LOSS_ALPHA * losses['ae_loss']
