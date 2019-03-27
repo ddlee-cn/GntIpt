@@ -97,13 +97,13 @@ class InpaintCAModel(Model):
         ones_x = tf.ones_like(x)[:, :, :, 0:1]
         x = tf.concat([x, ones_x, ones_x*mask], axis=3)
 
+
         # two stage network
         cnum = 32
         with tf.variable_scope(name, reuse=reuse), \
                 arg_scope([gen_conv, gen_deconv],
                           training=training, padding=padding):
             # stage1
-            pdb.set_trace()
             x = gen_conv(x, cnum, 5, 1, name='conv1')
             x = gen_conv(x, 2*cnum, 3, 2, name='conv2_downsample')
             x = gen_conv(x, 2*cnum, 3, 1, name='conv3')
@@ -204,19 +204,15 @@ class InpaintCAModel(Model):
         with tf.variable_scope('discriminator', reuse=reuse):
             dglobal = self.build_wgan_global_discriminator(
                 batch_global, reuse=reuse, training=training)
-            # add new layer for global patch
-            dout_global = tf.reduce_mean(dglobal, name='dout_global_patch')
-            return dout_global
+            return dglobal
 
 
     def build_graph_with_losses(self, batch_data, mask, config, training=True,
                                 summary=False, reuse=False):
         batch_pos = batch_data / 127.5 - 1.
         # generate mask, 1 represents masked point
-        # if mask is None:
-        #     bbox = random_bbox(config)
-        #     mask = bbox2mask(bbox, config, name='mask_c')
-
+        # bbox = random_bbox(config)
+        # mask = bbox2mask(bbox, config, name='mask_c')
         batch_incomplete = batch_pos*(1.-mask)
         x1, x2, offset_flow = self.build_inpaint_net(
             batch_incomplete, mask, config, reuse=reuse, training=training,
@@ -238,7 +234,7 @@ class InpaintCAModel(Model):
         # local_patch_x2 = local_patch(x2, bbox)
         # local_patch_batch_complete = local_patch(batch_complete, bbox)
         # local_patch_mask = local_patch(mask, bbox)
-        # l1_alpha = config.COARSE_L1_ALPHA
+        l1_alpha = config.COARSE_L1_ALPHA
         # losses['l1_loss'] = l1_alpha * tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x1)*spatial_discounting_mask(config))
         # if not config.PRETRAIN_COARSE_NETWORK:
         #     losses['l1_loss'] += tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x2)*spatial_discounting_mask(config))        
@@ -269,12 +265,16 @@ class InpaintCAModel(Model):
             # seperate gan
             # pos_neg_local, pos_neg_global = self.build_wgan_discriminator(local_patch_batch_pos_neg, batch_pos_neg, training=training, reuse=reuse)
             # pos_local, neg_local = tf.split(pos_neg_local, 2)
-            pos_neg_global = self.build_wgan_discriminator_global(batch_pos_neg, training=training, resue=reuse)
-            pos_global, neg_global = tf.split(pos_neg_global, 2)
+            pos_neg_global = self.build_wgan_discriminator_global(batch_pos_neg, training=training, reuse=reuse)
+            # split pos and neg first, then do reduce_mean
+            dout_pos_global, dout_neg_global = tf.split(pos_neg_global, 2)
+            pos_global = tf.reduce_mean(dout_pos_global, name='dout_pos_global')
+            neg_global = tf.reduce_mean(dout_neg_global, name='dout_neg_global')
             # wgan loss
             # g_loss_local, d_loss_local = gan_wgan_loss(pos_local, neg_local, name='gan/local_gan')
             g_loss_global, d_loss_global = gan_wgan_loss(pos_global, neg_global, name='gan/global_gan')
             # losses['g_loss'] = config.GLOBAL_WGAN_LOSS_ALPHA * g_loss_global + g_loss_local
+            losses['g_loss'] = g_loss_global
             # losses['d_loss'] = d_loss_global + d_loss_local
             losses['d_loss'] = d_loss_global
             # gp
