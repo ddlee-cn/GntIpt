@@ -237,11 +237,15 @@ class InpaintCAModel(Model):
         l1_alpha = config.COARSE_L1_ALPHA
         # losses['l1_loss'] = l1_alpha * tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x1)*spatial_discounting_mask(config))
         # if not config.PRETRAIN_COARSE_NETWORK:
-        #     losses['l1_loss'] += tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x2)*spatial_discounting_mask(config))        
-        losses['ae_loss'] = l1_alpha * tf.reduce_mean(tf.abs(batch_pos - x1) * (1.-mask))
+        #     losses['l1_loss'] += tf.reduce_mean(tf.abs(local_patch_batch_pos - local_patch_x2)*spatial_discounting_mask(config))
+        # losses['ae_loss'] = l1_alpha * tf.reduce_mean(tf.abs(batch_pos - x1) * (1.-mask))
+        # if not config.PRETRAIN_COARSE_NETWORK:
+        #     losses['ae_loss'] += tf.reduce_mean(tf.abs(batch_pos - x2) * (1.-mask))
+        # losses['ae_loss'] /= tf.reduce_mean(1.-mask)
+        # modify ae_loss to whole image L1 Loss
+        losses['ae_loss'] = l1_alpha * tf.reduce_mean(tf.abs(batch_pos - x1))
         if not config.PRETRAIN_COARSE_NETWORK:
-            losses['ae_loss'] += tf.reduce_mean(tf.abs(batch_pos - x2) * (1.-mask))
-        losses['ae_loss'] /= tf.reduce_mean(1.-mask)
+            losses['ae_loss'] += tf.reduce_mean(tf.abs(batch_pos - x2))
         if summary:
             # scalar_summary('losses/l1_loss', losses['l1_loss'])
             scalar_summary('losses/ae_loss', losses['ae_loss'])
@@ -316,9 +320,17 @@ class InpaintCAModel(Model):
         # losses['g_loss'] += config.L1_LOSS_ALPHA * losses['l1_loss']
         # logger.info('Set L1_LOSS_ALPHA to %f' % config.L1_LOSS_ALPHA)
         logger.info('Set GAN_LOSS_ALPHA to %f' % config.GAN_LOSS_ALPHA)
+
+        # add scalar_summary for g_loss and g_loss+ae_loss
+        if summary and not config.PRETRAIN_COARSE_NETWORK:
+            scalar_summary('g_loss_alphaed', losses['g_loss'])
         if config.AE_LOSS:
             losses['g_loss'] += config.AE_LOSS_ALPHA * losses['ae_loss']
             logger.info('Set AE_LOSS_ALPHA to %f' % config.AE_LOSS_ALPHA)
+        
+        if summary and not config.PRETRAIN_COARSE_NETWORK:
+            scalar_summary('g_loss_plus_ae_loss', losses['g_loss'])
+
         g_vars = tf.get_collection(
             tf.GraphKeys.TRAINABLE_VARIABLES, 'inpaint_net')
         d_vars = tf.get_collection(
