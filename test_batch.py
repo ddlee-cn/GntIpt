@@ -72,7 +72,7 @@ if __name__ == "__main__":
             image = cv2.imread(image_file)
             mask = cv2.imread(mask_file)
             # use mask = 255-mask for ICME Testing
-            # use mask for pconv_irregular_mask
+            # mask = 255-mask
 
             h, w, _ = image.shape
             if not image.shape == mask.shape:
@@ -96,13 +96,11 @@ if __name__ == "__main__":
             # print(input_image.shape)
 
             result = sess.run(output, {x: input_image})
-            # pdb.set_trace()
 
             # write output
             save_path = str(Path(args.output_dir).joinpath(Path(mask_file).name))
 
             # print(image.shape, mask.shape, result[0][:, :, ::-1].shape)
-            # pdb.set_trace()
             if args.demo:
                 mask_mult = (255-mask[0])
                 ori_image = image.copy()

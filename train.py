@@ -21,15 +21,17 @@ parser.add_argument('--config', default="configs/finetune.yml", type=str,
                     help='config YAML file')
 parser.add_argument('--option', default="finetune", type=str, help="training option: scratch, finetune, resume")
 
-def multigpu_graph_def(model, data, config, gpu_id=0, loss_type='g'):
+def multigpu_graph_def(model, data, mask, config, gpu_id=0, loss_type='g'):
     with tf.device('/cpu:0'):
         images = data.data_pipeline(config.BATCH_SIZE)
+    # with tf.device('/cpu:0'):
+    #     masks = mask.data_pipeline(1)
     if gpu_id == 0 and loss_type == 'g':
         _, _, losses = model.build_graph_with_losses(
-            images, config, summary=True, reuse=True)
+            images, mask, config, summary=True, reuse=True)
     else:
         _, _, losses = model.build_graph_with_losses(
-            images, config, reuse=True)
+            images, mask, config, reuse=True)
     if loss_type == 'g':
         return losses['g_loss']
     elif loss_type == 'd':
@@ -46,9 +48,8 @@ if __name__ == "__main__":
         ng.set_gpus(config.GPU_ID)
     else:
         ng.get_gpus(config.NUM_GPUS)
-    mask = None
+
     if config.External_mask:
-        batch_size = config.BATCH_SIZE
         # load irregualr mask dataset
         with open(config.External_mask) as f:
             fnames = f.read().splitlines()
@@ -58,18 +59,32 @@ if __name__ == "__main__":
         # convert to binary
         img_dataset = img_dataset.map(lambda x: x/255)
         img_dataset = img_dataset.repeat()
-        img_dataset = img_dataset.batch(batch_size)
-        img_dataset = img_dataset.prefetch(buffer_size=batch_size*2)
+        # the original design use the very same random mask across whole batch
+        # so set mask_dataset batch_size to 1
+        img_dataset = img_dataset.batch(1)
+        # using tf.data.Dataset.make_initializable_iterator would catch not initialized error of iterator
         iter = img_dataset.make_one_shot_iterator()
         mask = iter.get_next()
+        # tf.layers.conv2d assume the input channel is known
+        # while mask have (?, 256, 256, ?) shape, so set shape explicitly
+        mask.set_shape((None, None, None, 1))
+
 
     # training data
+    # tried to use ng.data.DataFromFNames class to load mask data,
+    # but we can't set data_shape from params, thus catch shape mismatch of feed_dict and placeholder(1 VS 3)
+    # if config.External_mask:
+    #     # load irregualr mask dataset
+    #     with open(config.External_mask) as f:
+    #         fnames = f.read().splitlines()
+    #     mask = ng.data.DataFromFNames(
+    #         fnames, config.MASK_SHAPES, random_crop=config.RANDOM_CROP)
+    #     masks = mask.data_pipeline(1)
     with open(config.DATA_FLIST[config.DATASET][0]) as f:
         fnames = f.read().splitlines()
     data = ng.data.DataFromFNames(
         fnames, config.IMG_SHAPES, random_crop=config.RANDOM_CROP)
     images = data.data_pipeline(config.BATCH_SIZE)
-    # pdb.set_trace()
     # main model
     model = InpaintCAModel()
     g_vars, d_vars, losses = model.build_graph_with_losses(
@@ -104,7 +119,7 @@ if __name__ == "__main__":
     #     ng.date_uid(), socket.gethostname(), config.DATASET,
     #     'MASKED' if config.GAN_WITH_MASK else 'NORMAL',
     #     config.GAN,config.LOG_DIR])
-    pretrained_prefix = str(checkpoint_dir.joinpath(config.LOD_DIR).joinpath("pretrained"))
+    pretrained_prefix = str(checkpoint_dir.joinpath(config.LOG_DIR).joinpath("pretrained"))
     log_prefix = checkpoint_dir.joinpath(config.LOG_DIR).joinpath(ng.date_uid())
     if not log_prefix.parent.exists():
         log_prefix.parent.mkdir()
@@ -121,7 +136,7 @@ if __name__ == "__main__":
         restore_prefix = log_prefix
     elif args.option is "finetune":
         restore_prefix = pretrained_prefix
-    
+
     # train discriminator with secondary trainer, should initialize before
     # primary trainer.
     discriminator_training_callback = ng.callbacks.SecondaryTrainer(
@@ -131,7 +146,7 @@ if __name__ == "__main__":
         max_iters=5,
         graph_def=multigpu_graph_def,
         graph_def_kwargs={
-            'model': model, 'data': data, 'config': config, 'loss_type': 'd'},
+            'model': model, 'mask': mask, 'data': data, 'config': config, 'loss_type': 'd'},
     )
     # train generator with primary trainer
     # use multi gpu
@@ -145,7 +160,7 @@ if __name__ == "__main__":
         grads_summary=config.GRADS_SUMMARY,
         gradient_processor=gradient_processor,
         graph_def_kwargs={
-            'model': model, 'data': data, 'config': config, 'loss_type': 'g'},
+            'model': model, 'mask': mask, 'data': data, 'config': config, 'loss_type': 'g'},
         spe=config.TRAIN_SPE,
         log_dir=log_prefix,
     )
