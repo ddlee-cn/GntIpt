@@ -5,7 +5,11 @@ import logging
 import argparse
 import pdb
 import tensorflow as tf
+import sys
+curr_path = os.path.abspath(os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(curr_path, "../neuralgym"))
 import neuralgym as ng
+print(ng)
 
 from pathlib import Path
 from shutil import copyfile
@@ -24,14 +28,14 @@ parser.add_argument('--option', default="finetune", type=str, help="training opt
 def multigpu_graph_def(model, data, mask, config, gpu_id=0, loss_type='g'):
     with tf.device('/cpu:0'):
         images = data.data_pipeline(config.BATCH_SIZE)
-    # with tf.device('/cpu:0'):
-    #     masks = mask.data_pipeline(1)
+    with tf.device('/cpu:0'):
+        masks = mask.data_pipeline(1)
     if gpu_id == 0 and loss_type == 'g':
         _, _, losses = model.build_graph_with_losses(
-            images, mask, config, summary=True, reuse=True)
+            images, masks, config, summary=True, reuse=True)
     else:
         _, _, losses = model.build_graph_with_losses(
-            images, mask, config, reuse=True)
+            images, masks, config, reuse=True)
     if loss_type == 'g':
         return losses['g_loss']
     elif loss_type == 'd':
@@ -49,37 +53,37 @@ if __name__ == "__main__":
     else:
         ng.get_gpus(config.NUM_GPUS)
 
-    if config.External_mask:
-        # load irregualr mask dataset
-        with open(config.External_mask) as f:
-            fnames = f.read().splitlines()
-        filename_dataset = tf.data.Dataset.list_files(fnames)
-        img_dataset = filename_dataset.map(lambda x: tf.image.decode_png(tf.read_file(x)))
-        img_dataset = img_dataset.map(lambda x: tf.image.resize_images(x, config.IMG_SHAPES[0:2]))
-        # convert to binary
-        img_dataset = img_dataset.map(lambda x: x/255)
-        img_dataset = img_dataset.repeat()
-        # the original design use the very same random mask across whole batch
-        # so set mask_dataset batch_size to 1
-        img_dataset = img_dataset.batch(1)
-        # using tf.data.Dataset.make_initializable_iterator would catch not initialized error of iterator
-        iter = img_dataset.make_one_shot_iterator()
-        mask = iter.get_next()
-        # tf.layers.conv2d assume the input channel is known
-        # while mask have (?, 256, 256, ?) shape, so set shape explicitly
-        mask.set_shape((None, None, None, 1))
+    # if config.External_mask:
+    #     # load irregualr mask dataset
+    #     with open(config.External_mask) as f:
+    #         fnames = f.read().splitlines()
+    #     filename_dataset = tf.data.Dataset.list_files(fnames)
+    #     img_dataset = filename_dataset.map(lambda x: tf.image.decode_png(tf.read_file(x)))
+    #     img_dataset = img_dataset.map(lambda x: tf.image.resize_images(x, config.IMG_SHAPES[0:2]))
+    #     # convert to binary
+    #     img_dataset = img_dataset.map(lambda x: x/255)
+    #     img_dataset = img_dataset.repeat()
+    #     # the original design use the very same random mask across whole batch
+    #     # so set mask_dataset batch_size to 1
+    #     img_dataset = img_dataset.batch(1)
+    #     # using tf.data.Dataset.make_initializable_iterator would catch not initialized error of iterator
+    #     iter = img_dataset.make_one_shot_iterator()
+    #     mask = iter.get_next()
+    #     # tf.layers.conv2d assume the input channel is known
+    #     # while mask have (?, 256, 256, ?) shape, so set shape explicitly
+    #     mask.set_shape((None, None, None, 1))
 
 
     # training data
     # tried to use ng.data.DataFromFNames class to load mask data,
     # but we can't set data_shape from params, thus catch shape mismatch of feed_dict and placeholder(1 VS 3)
-    # if config.External_mask:
-    #     # load irregualr mask dataset
-    #     with open(config.External_mask) as f:
-    #         fnames = f.read().splitlines()
-    #     mask = ng.data.DataFromFNames(
-    #         fnames, config.MASK_SHAPES, random_crop=config.RANDOM_CROP)
-    #     masks = mask.data_pipeline(1)
+    if config.External_mask:
+        # load irregualr mask dataset
+        with open(config.External_mask) as f:
+            fnames = f.read().splitlines()
+        mask = ng.data.DataFromFNames(
+            fnames, config.MASK_SHAPES, random_crop=config.RANDOM_CROP)
+        masks = mask.data_pipeline(1)
     with open(config.DATA_FLIST[config.DATASET][0]) as f:
         fnames = f.read().splitlines()
     data = ng.data.DataFromFNames(
@@ -88,7 +92,7 @@ if __name__ == "__main__":
     # main model
     model = InpaintCAModel()
     g_vars, d_vars, losses = model.build_graph_with_losses(
-        images, mask, config=config)
+        images, masks, config=config)
     # validation images
     if config.VAL:
         with open(config.DATA_FLIST[config.DATASET][1]) as f:
