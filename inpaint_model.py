@@ -97,7 +97,6 @@ class InpaintCAModel(Model):
         ones_x = tf.ones_like(x)[:, :, :, 0:1]
         x = tf.concat([x, ones_x, ones_x*mask], axis=3)
 
-
         # two stage network
         cnum = 32
         with tf.variable_scope(name, reuse=reuse), \
@@ -185,7 +184,9 @@ class InpaintCAModel(Model):
             x = dis_conv(x, cnum*4, name='conv4', training=training) # 32x16x16x256
             # remove flatten layer to make it like PatchGAN
             # x = flatten(x, name='flatten')
-            x = dis_conv(x, 1, name='conv5', training=training)
+            # channel=1, kernel=5, stride=1
+            x = tf.layers.conv2d(x, 1, 5, 1, 'SAME', name='patch')
+            x = tf.sigmoid(x, name='patch_sigmoid')
             return x
 
     def build_wgan_discriminator(self, batch_local, batch_global,
@@ -217,12 +218,14 @@ class InpaintCAModel(Model):
         x1, x2, offset_flow = self.build_inpaint_net(
             batch_incomplete, mask, config, reuse=reuse, training=training,
             padding=config.PADDING)
+
         if config.PRETRAIN_COARSE_NETWORK:
             batch_predicted = x1
             logger.info('Set batch_predicted to x1.')
         else:
             batch_predicted = x2
             logger.info('Set batch_predicted to x2.')
+        
         losses = {}
         # apply mask and complete image
         batch_complete = batch_predicted*mask + batch_incomplete*(1.-mask)
@@ -272,6 +275,7 @@ class InpaintCAModel(Model):
             pos_neg_global = self.build_wgan_discriminator_global(batch_pos_neg, training=training, reuse=reuse)
             # split pos and neg first, then do reduce_mean
             dout_pos_global, dout_neg_global = tf.split(pos_neg_global, 2)
+
             pos_global = tf.reduce_mean(dout_pos_global, name='dout_pos_global')
             neg_global = tf.reduce_mean(dout_neg_global, name='dout_neg_global')
             # wgan loss
