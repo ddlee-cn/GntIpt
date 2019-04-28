@@ -76,7 +76,8 @@ if __name__ == "__main__":
 
             h, w, _ = image.shape
             if not image.shape == mask.shape:
-                mask = cv2.resize(mask, (h, w))
+                # swap h and w
+                mask = cv2.resize(mask, (w, h))
 
             grid = 8
             image = image[:h//grid*grid, :w//grid*grid, :]
